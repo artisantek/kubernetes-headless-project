@@ -25,6 +25,8 @@ This project demonstrates Headless Services using a practical MySQL master-slave
 
 ## Architecture Overview
 
+![MySQL Master-Slave Architecture with Kubernetes Services](./images/architecture.jpg)
+
 ### Components
 
 #### MySQL StatefulSet
