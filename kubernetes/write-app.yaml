@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: write-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: write-app
+  template:
+    metadata:
+      labels:
+        app: write-app
+    spec:
+      initContainers:
+      - name: init-db
+        image: mysql:8.0
+        command:
+        - bash
+        - -c
+        - |
+          set -ex
+          mysql -h ${DB_HOST} -u root << EOF
+          CREATE DATABASE IF NOT EXISTS ${DB_NAME};
+          USE ${DB_NAME};
+          CREATE TABLE IF NOT EXISTS users (
+              id INT AUTO_INCREMENT PRIMARY KEY,
+              name VARCHAR(255) NOT NULL,
+              email VARCHAR(255) NOT NULL,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASSWORD}';
+          GRANT SELECT ON ${DB_NAME}.* TO '${DB_USER}'@'%';
+          GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'%';
+          FLUSH PRIVILEGES;
+          EOF
+        env:
+        - name: DB_HOST
+          value: "mysql-0.mysql"
+        - name: DB_USER
+          value: "appuser"
+        - name: DB_PASSWORD
+          value: "password123"
+        - name: DB_NAME
+          value: "userdb"
+      containers:
+      - name: write-app
+        image: artisantek/headless-write:1
+        ports:
+        - containerPort: 5000
+        env:
+        - name: DB_HOST
+          value: "mysql-0.mysql"
+        - name: DB_USER
+          value: "appuser"
+        - name: DB_PASSWORD
+          value: "password123"
+        - name: DB_NAME
+          value: "userdb"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: write-app-service
+spec:
+  type: NodePort
+  selector:
+    app: write-app
+  ports:
+  - port: 80
+    targetPort: 5000
+    nodePort: 30000

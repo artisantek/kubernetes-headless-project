@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: read-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: read-app
+  template:
+    metadata:
+      labels:
+        app: read-app
+    spec:
+      containers:
+      - name: read-app
+        image: artisantek/headless-read:1  # Replace with your image
+        ports:
+        - containerPort: 5000
+        env:
+        - name: DB_HOST
+          value: "mysql-read"
+        - name: DB_USER
+          value: "appuser"
+        - name: DB_PASSWORD
+          value: "password123"
+        - name: DB_NAME
+          value: "userdb"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: read-app-service
+spec:
+  type: NodePort
+  selector:
+    app: read-app
+  ports:
+  - port: 80
+    targetPort: 5000
+    nodePort: 30001
