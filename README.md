@@ -92,12 +92,77 @@ This project demonstrates Headless Services using a practical MySQL master-slave
   * DB_PASSWORD: password123
   * DB_NAME: userdb
 
+## Setting Up Dynamic Volume Provisioning
+
+For the MySQL StatefulSet to work properly, you need a functioning storage class for dynamic volume provisioning. This demo uses Persistent Volume Claims (PVCs) which require either manually created Persistent Volumes or a storage provisioner.
+
+### Using OpenEBS for Local Storage
+
+OpenEBS provides an easy way to set up dynamic volume provisioning for local volumes, which is perfect for development and testing environments.
+
+#### Install OpenEBS
+
+1. Add the OpenEBS Helm repository:
+```bash
+helm repo add openebs https://openebs.github.io/charts
+helm repo update
+```
+
+2. Install OpenEBS (without Mayastor for simplicity):
+```bash
+helm install openebs --namespace openebs openebs/openebs \
+  --set engines.replicated.mayastor.enabled=false \
+  --create-namespace
+```
+
+3. Verify the installation:
+```bash
+kubectl get pods -n openebs
+```
+
+#### Set OpenEBS hostpath as Default Storage Class
+
+1. Check your current storage classes:
+```bash
+kubectl get storageclass
+```
+
+2. Make OpenEBS hostpath the default storage class:
+```bash
+# First, unset the default flag on your current default storage class (if any)
+kubectl patch storageclass <current-default-storage-class> -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
+
+# Then set OpenEBS hostpath as the default
+kubectl patch storageclass openebs-hostpath -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+```
+
+3. Verify the changes:
+```bash
+kubectl get storageclass
+```
+You should see openebs-hostpath marked as default (with "(default)" next to its name).
+
+4. Update your PVCs to use the new storage class:
+If you've already defined PVCs in your YAML files, you can either:
+- Remove the `storageClassName` field to use the default
+- Explicitly set `storageClassName: openebs-hostpath`
+
+### Alternative Options
+
+If you're running in a cloud environment:
+- AWS: Use `aws-ebs` storage class
+- GCP: Use `standard` storage class
+- Azure: Use `managed-premium` storage class
+
+For production use cases, consider using more robust storage solutions like Ceph, Portworx, or cloud-native volume solutions.
+
 ## Quick Start
 
 ### Prerequisites
 * Kubernetes cluster
 * kubectl configured
 * Node ports 30000 and 30001 available
+* Storage class configured (see Dynamic Volume Provisioning section)
 
 ### Directory Structure
 ```
