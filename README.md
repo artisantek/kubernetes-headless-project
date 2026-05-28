@@ -1,4 +1,4 @@
-# Understanding Kubernetes Headless Services: PostgreSQL Replication Demo
+# Understanding Kubernetes Headless Services
 
 ## Introduction
 This project demonstrates Kubernetes Headless Services using a real-world PostgreSQL primary-replica setup. It shows how Headless and ClusterIP services work together for database write/read separation.
@@ -13,25 +13,14 @@ Key points:
 - DNS returns all pod IPs (not one service IP)
 - Each pod gets its own DNS: `<pod-name>.<service-name>.<namespace>.svc.cluster.local`
 
-## Architecture
+## Architecture Overview
 
-```
-                 ┌────────────────────────────────────────────┐
-                 │           Kubernetes Cluster               │
-                 │                                            │
-  Write App      │   Headless Service (postgres)              │
-  ──────────────►│   clusterIP: None                         │
-  DB_HOST:       │     ├─► postgres-0.postgres (Primary)     │
-  postgres-0.    │     └─► postgres-1.postgres (Replica)     │
-  postgres       │                    ▲                       │
-                 │                    │ streaming replication  │
-                 │                    │                       │
-  Read App       │   ClusterIP Service (postgres-read)       │
-  ──────────────►│   10.x.x.x (load balanced)               │
-  DB_HOST:       │     ├─► postgres-0                        │
-  postgres-read  │     └─► postgres-1                        │
-                 └────────────────────────────────────────────┘
-```
+<div align="center">
+  <img src="./images/architecture.jpg" width="500" alt="MySQL Master-Slave Architecture with Kubernetes Services">
+</div>
+
+> **Note:** In the latest update, MySQL has been replaced with PostgreSQL.
+
 
 ### How Both Services Work Together
 
@@ -53,10 +42,20 @@ Key points:
 ### Write Application (Port 30000)
 - Connects to `postgres-0.postgres` via headless service
 - Registers users (INSERT operations)
+- Environment Configuration:
+  - DB_HOST: postgres-0.postgres
+  - DB_USER: appuser
+  - DB_PASSWORD: password123
+  - DB_NAME: userdb
 
 ### Read Application (Port 30001)
 - Connects to `postgres-read` ClusterIP service
 - Reads users (SELECT operations, load balanced)
+- Environment Configuration:
+  - DB_HOST: postgres-read
+  - DB_USER: appuser
+  - DB_PASSWORD: password123
+  - DB_NAME: userdb
 
 ## Directory Structure
 ```
@@ -82,41 +81,73 @@ Key points:
 - Kubernetes cluster
 - kubectl configured
 - A default StorageClass (see below)
-- Docker (for building images)
+- Node ports 30000 and 30001 available
 
-### Step 1: Set up Storage (if needed)
+### Setting Up Dynamic Volume Provisioning
 
+For the PostgreSQL StatefulSet to work properly, you need a functioning storage class for dynamic volume provisioning. This demo uses Persistent Volume Claims (PVCs) which require either manually created Persistent Volumes or a storage provisioner.
+
+#### Using OpenEBS for Local Storage
+
+OpenEBS provides an easy way to set up dynamic volume provisioning for local volumes, which is perfect for development and testing environments.
+
+#### Install OpenEBS
+
+1. Add the OpenEBS Helm repository:
 ```bash
-# Install OpenEBS for local storage
 helm repo add openebs https://openebs.github.io/charts
 helm repo update
+```
+
+2. Install OpenEBS (without Mayastor for simplicity):
+```bash
 helm install openebs --namespace openebs openebs/openebs \
   --set engines.replicated.mayastor.enabled=false \
   --create-namespace
+```
 
-# Set as default storage class
+3. Verify the installation:
+```bash
+kubectl get pods -n openebs
+```
+
+#### Set OpenEBS hostpath as Default Storage Class
+
+1. Check your current storage classes:
+```bash
+kubectl get storageclass
+```
+
+2. Make OpenEBS hostpath the default storage class:
+```bash
+# First, unset the default flag on your current default storage class (if any)
+kubectl patch storageclass <current-default-storage-class> -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
+
+# Then set OpenEBS hostpath as the default
 kubectl patch storageclass openebs-hostpath -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
 ```
 
-### Step 2: Build and Load Images
-
+3. Verify the changes:
 ```bash
-# Build images
-docker build -t headless-write:1 ./write-app/
-docker build -t headless-read:1 ./read-app/
-
-# Load images onto cluster nodes (for containerd clusters)
-docker save headless-write:1 -o /tmp/headless-write.tar
-docker save headless-read:1 -o /tmp/headless-read.tar
-
-for node in <your-nodes>; do
-  scp /tmp/headless-write.tar /tmp/headless-read.tar $node:/tmp/
-  ssh $node "sudo ctr -n k8s.io images import /tmp/headless-write.tar && \
-             sudo ctr -n k8s.io images import /tmp/headless-read.tar"
-done
+kubectl get storageclass
 ```
+You should see openebs-hostpath marked as default (with "(default)" next to its name).
 
-### Step 3: Deploy
+4. Update your PVCs to use the new storage class:
+If you've already defined PVCs in your YAML files, you can either:
+- Remove the `storageClassName` field to use the default
+- Explicitly set `storageClassName: openebs-hostpath`
+
+#### Alternative Options
+
+If you're running in a cloud environment:
+- AWS: Use `aws-ebs` storage class
+- GCP: Use `standard` storage class
+- Azure: Use `managed-premium` storage class
+
+For production use cases, consider using more robust storage solutions like Ceph, Portworx, or cloud-native volume solutions.
+
+### Installation Steps
 
 ```bash
 # Deploy PostgreSQL (StatefulSet + Services)
@@ -128,11 +159,7 @@ kubectl get pods -w
 # Deploy applications
 kubectl apply -f kubernetes/write-app.yaml
 kubectl apply -f kubernetes/read-app.yaml
-```
 
-### Step 4: Verify
-
-```bash
 # Check all pods are running
 kubectl get pods
 
@@ -143,21 +170,9 @@ kubectl exec postgres-0 -- psql -U postgres -c "SELECT client_addr, state FROM p
 kubectl exec postgres-1 -- psql -U postgres -c "SELECT pg_is_in_recovery();"
 ```
 
-## Testing the Demo
+### Testing the Demo
 
-### Test Write (via Headless Service)
-```bash
-curl -X POST http://<node-ip>:30000/submit \
-  -H "Content-Type: application/json" \
-  -d '{"name":"John Doe","email":"john@example.com"}'
-```
-
-### Test Read (via ClusterIP Service)
-```bash
-curl http://<node-ip>:30001/users
-```
-
-### Observe DNS Differences
+#### Observe DNS Differences
 ```bash
 # Headless service — returns individual pod IPs
 kubectl run -it --rm debug --image=busybox --restart=Never -- nslookup postgres
@@ -165,6 +180,12 @@ kubectl run -it --rm debug --image=busybox --restart=Never -- nslookup postgres
 # ClusterIP service — returns single service IP
 kubectl run -it --rm debug --image=busybox --restart=Never -- nslookup postgres-read
 ```
+
+#### Testing Direct Communication
+- Access Write App: `http://<node-ip>:30000`
+  - Writes always go to postgres-0 (master) via headless service
+- Access Read App: `http://<node-ip>:30001`
+  - Reads are load balanced across pods
 
 ## Key Learning Points
 
