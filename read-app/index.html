@@ -60,7 +60,7 @@
                 .then(data => {
                     if (data.success) {
                         document.getElementById('podInfo').innerHTML = 
-                            `Connected to MySQL Pod: ${data.mysql_pod}`;
+                            `Connected to PostgreSQL Server: ${data.postgres_server}`;
                         
                         const table = `
                             <table>

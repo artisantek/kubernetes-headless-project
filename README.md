@@ -1,27 +1,17 @@
-# Understanding Kubernetes Headless Services: MySQL Replication Demo
+# Understanding Kubernetes Headless Services
 
 ## Introduction
-This project demonstrates the practical implementation of Kubernetes Headless Services using a real-world example of MySQL master-slave replication. The demo consists of three main components: a Write Application, a Read Application, and a MySQL database setup with master-slave replication.
+This project demonstrates Kubernetes Headless Services using a real-world PostgreSQL primary-replica setup. It shows how Headless and ClusterIP services work together for database write/read separation.
 
 ## What is a Headless Service?
-A Headless Service in Kubernetes is a service that doesn't allocate a cluster IP address. Instead, it creates DNS entries for each Pod that's part of the service. This is particularly useful when:
+A regular Kubernetes Service gives you one IP that load balances across pods. A **Headless Service** is different — it has no ClusterIP. Instead, DNS returns the IP of every pod behind the service.
 
-- You need direct communication with specific Pods
-- You don't need load balancing
-- You want to discover individual Pod IP addresses
+**Why is this useful?** When you need to talk to a *specific* pod — like a database primary — you need its direct address, not a load balancer.
 
-Key characteristics of a Headless Service:
-- The `clusterIP` field is set to `None`
-- DNS queries return the IP addresses of all Pods that match the service selector
-- Each Pod gets its own DNS entry in the format: `<pod-name>.<service-name>.<namespace>.svc.cluster.local`
-
-## Demo Overview
-This project demonstrates Headless Services using a practical MySQL master-slave replication setup. By using this common database pattern, we'll see how Headless Services enable direct Pod communication.
-
-### Why MySQL Replication as an Example?
-- **Direct Communication Need**: Write operations must go to the master node specifically
-- **DNS-Based Discovery**: Slave nodes need to find and connect to the master
-- **Stable Network Identity**: Each MySQL instance needs a consistent identity for replication
+Key points:
+- `clusterIP: None` makes it headless
+- DNS returns all pod IPs (not one service IP)
+- Each pod gets its own DNS: `<pod-name>.<service-name>.<namespace>.svc.cluster.local`
 
 ## Architecture Overview
 
@@ -29,74 +19,75 @@ This project demonstrates Headless Services using a practical MySQL master-slave
   <img src="./images/architecture.jpg" width="500" alt="MySQL Master-Slave Architecture with Kubernetes Services">
 </div>
 
-### Components
+> **Note:** In the latest update, MySQL has been replaced with PostgreSQL.
 
-#### MySQL StatefulSet
-* 2 Pod replicas (1 master, 1 slave)
-* mysql-0.mysql: Master node (Primary)
-* mysql-1.mysql: Slave node (Replica)
 
-#### Kubernetes Services
-* Headless Service (mysql): For direct Pod access
-* ClusterIP Service (mysql-read): For read operations load balancing
+### How Both Services Work Together
 
-#### Applications
-* Write App: Connects directly to master (mysql-0.mysql)
-* Read App: Connects to mysql-read service
+| Service | Type | Purpose | DNS Returns |
+|---------|------|---------|-------------|
+| `postgres` | Headless (`clusterIP: None`) | Direct pod access for writes | Individual pod IPs |
+| `postgres-read` | ClusterIP | Load-balanced reads | Single service IP |
 
-### Service Discovery
+- **Write App** → connects to `postgres-0.postgres` (headless) → always hits the primary
+- **Read App** → connects to `postgres-read` (ClusterIP) → load balanced across both pods
 
-#### Headless Service (mysql)
-* DNS entries:
-  * mysql-0.mysql.default.svc.cluster.local
-  * mysql-1.mysql.default.svc.cluster.local
-* Used by Write App to connect to master
-* No load balancing (clusterIP: None)
+## Components
 
-#### Read Service (mysql-read)
-* Regular ClusterIP service
-* Load balances read requests across both Pods
-* Used by Read App for distributed reading
-
-## Components Details
-
-### MySQL Database
-* StatefulSet with 2 replicas
-* Persistent storage: 1Gi per pod
-* Master node configuration:
-  * Binary logging enabled
-  * Handles all write operations
-* Slave node configuration:
-  * Super-read-only mode
-  * Automatic replication from master
+### PostgreSQL StatefulSet (2 replicas)
+- `postgres-0`: Primary — handles all writes
+- `postgres-1`: Replica — streams data from primary, serves reads
+- Replication: PostgreSQL built-in streaming replication
 
 ### Write Application (Port 30000)
-* Connects directly to MySQL master via headless service
-* Features:
-  * User registration interface
-  * Database initialization
-* Environment Configuration:
-  * DB_HOST: mysql-0.mysql
-  * DB_USER: appuser
-  * DB_PASSWORD: password123
-  * DB_NAME: userdb
+- Connects to `postgres-0.postgres` via headless service
+- Registers users (INSERT operations)
+- Environment Configuration:
+  - DB_HOST: postgres-0.postgres
+  - DB_USER: appuser
+  - DB_PASSWORD: password123
+  - DB_NAME: userdb
 
 ### Read Application (Port 30001)
-* Connects to mysql-read service for load balanced reads
-* Features:
-  * MySQL pod identification
-  * Load balancing demonstration
-* Environment Configuration:
-  * DB_HOST: mysql-read
-  * DB_USER: appuser
-  * DB_PASSWORD: password123
-  * DB_NAME: userdb
+- Connects to `postgres-read` ClusterIP service
+- Reads users (SELECT operations, load balanced)
+- Environment Configuration:
+  - DB_HOST: postgres-read
+  - DB_USER: appuser
+  - DB_PASSWORD: password123
+  - DB_NAME: userdb
 
-## Setting Up Dynamic Volume Provisioning
+## Directory Structure
+```
+├── kubernetes/
+│   ├── postgres-statefulset.yaml   # StatefulSet + both Services
+│   ├── write-app.yaml              # Write app Deployment + NodePort
+│   └── read-app.yaml               # Read app Deployment + NodePort
+├── write-app/
+│   ├── app.py
+│   ├── index.html
+│   ├── requirements.txt
+│   └── Dockerfile
+└── read-app/
+    ├── app.py
+    ├── index.html
+    ├── requirements.txt
+    └── Dockerfile
+```
 
-For the MySQL StatefulSet to work properly, you need a functioning storage class for dynamic volume provisioning. This demo uses Persistent Volume Claims (PVCs) which require either manually created Persistent Volumes or a storage provisioner.
+## Quick Start
 
-### Using OpenEBS for Local Storage
+### Prerequisites
+- Kubernetes cluster
+- kubectl configured
+- A default StorageClass (see below)
+- Node ports 30000 and 30001 available
+
+### Setting Up Dynamic Volume Provisioning
+
+For the PostgreSQL StatefulSet to work properly, you need a functioning storage class for dynamic volume provisioning. This demo uses Persistent Volume Claims (PVCs) which require either manually created Persistent Volumes or a storage provisioner.
+
+#### Using OpenEBS for Local Storage
 
 OpenEBS provides an easy way to set up dynamic volume provisioning for local volumes, which is perfect for development and testing environments.
 
@@ -147,7 +138,7 @@ If you've already defined PVCs in your YAML files, you can either:
 - Remove the `storageClassName` field to use the default
 - Explicitly set `storageClassName: openebs-hostpath`
 
-### Alternative Options
+#### Alternative Options
 
 If you're running in a cloud environment:
 - AWS: Use `aws-ebs` storage class
@@ -156,102 +147,57 @@ If you're running in a cloud environment:
 
 For production use cases, consider using more robust storage solutions like Ceph, Portworx, or cloud-native volume solutions.
 
-## Quick Start
-
-### Prerequisites
-* Kubernetes cluster
-* kubectl configured
-* Node ports 30000 and 30001 available
-* Storage class configured (see Dynamic Volume Provisioning section)
-
-### Directory Structure
-```
-/  
-├── kubernetes/  
-│   ├── mysql-statefulset.yaml  
-│   ├── write-app.yaml  
-│   └── read-app.yaml  
-├── write-app/  
-│   ├── app.py  
-│   ├── index.html
-│   ├── requirements.txt  
-│   └── Dockerfile  
-└── read-app/  
-    ├── app.py  
-    ├── index.html 
-    ├── requirements.txt 
-    └── Dockerfile 
-```
-
 ### Installation Steps
 
-1. Clone the repository:
 ```bash
-git clone https://github.com/artisantek/kubernetes-headless-project.git
-cd kubernetes-headless-project
-```
+# Deploy PostgreSQL (StatefulSet + Services)
+kubectl apply -f kubernetes/postgres-statefulset.yaml
 
-2. Deploy MySQL Cluster:
-```bash
-kubectl apply -f kubernetes/mysql-statefulset.yaml
-```
+# Wait for both postgres pods to be ready
+kubectl get pods -w
 
-3. Deploy Applications:
-```bash
+# Deploy applications
 kubectl apply -f kubernetes/write-app.yaml
 kubectl apply -f kubernetes/read-app.yaml
-```
 
-4. Verify all pods are running:
-```bash
+# Check all pods are running
 kubectl get pods
+
+# Verify replication is working
+kubectl exec postgres-0 -- psql -U postgres -c "SELECT client_addr, state FROM pg_stat_replication;"
+
+# Verify replica is in read-only mode
+kubectl exec postgres-1 -- psql -U postgres -c "SELECT pg_is_in_recovery();"
 ```
 
-## Understanding the Demo
+### Testing the Demo
 
-### 1. Observing DNS Resolution
+#### Observe DNS Differences
 ```bash
-# Check DNS entries created by headless service
-kubectl run -it --rm debug --image=busybox -- nslookup mysql
-kubectl run -it --rm debug --image=busybox -- nslookup mysql-0.mysql
+# Headless service — returns individual pod IPs
+kubectl run -it --rm debug --image=busybox --restart=Never -- nslookup postgres
+
+# ClusterIP service — returns single service IP
+kubectl run -it --rm debug --image=busybox --restart=Never -- nslookup postgres-read
 ```
 
-### 2. Testing Direct Communication
+#### Testing Direct Communication
 - Access Write App: `http://<node-ip>:30000`
-  - Writes always go to mysql-0 (master) via headless service
+  - Writes always go to postgres-0 (master) via headless service
 - Access Read App: `http://<node-ip>:30001`
   - Reads are load balanced across pods
 
-### Verify Replication
-```bash
-# Connect to master (mysql-0)
-kubectl exec -it mysql-0 -- mysql -u root -e "SHOW SLAVE HOSTS;"
-
-# Connect to slave (mysql-1)
-kubectl exec -it mysql-1 -- mysql -u root -e "SHOW SLAVE STATUS\G"
-```
-
-The slave status should show:
-
-* Slave_IO_Running: Yes
-* Slave_SQL_Running: Yes
-
 ## Key Learning Points
-1. **Headless vs Regular Services**
-   - Headless: Direct Pod access, no load balancing
-   - ClusterIP: Load balanced, single service IP
 
-2. **DNS Resolution**
-   - Headless creates individual Pod DNS entries
-   - Regular creates single service DNS entry
+1. **Headless Service** (`clusterIP: None`): Returns individual pod IPs via DNS. Use when you need to reach a specific pod.
 
-3. **Use Cases**
-   - When to use headless services
-   - When to use regular services
-   - How to combine both in a single application
+2. **ClusterIP Service** (default): Returns one service IP that load balances. Use for normal traffic distribution.
+
+3. **Together**: Headless for writes to the primary, ClusterIP for load-balanced reads — a common real-world database pattern.
 
 ## Production Notes
-This is a demo environment. For production:
-- Use proper secrets for MySQL credentials
-- Configure appropriate storage classes
-- Implement proper backup strategies
+This is a demo. For production:
+- Use Kubernetes Secrets for credentials
+- Configure proper storage classes
+- Use a PostgreSQL operator (like CloudNativePG) for production replication
+- Implement backup strategies
