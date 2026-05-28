@@ -1,17 +1,17 @@
 from flask import Flask, jsonify
-import mysql.connector
+import psycopg2
+import psycopg2.extras
 import os
 
 app = Flask(__name__)
 
 def get_db_connection():
-    connection = mysql.connector.connect(
-        host=os.environ.get('DB_HOST'),
-        user=os.environ.get('DB_USER'),
-        password=os.environ.get('DB_PASSWORD'),
-        database=os.environ.get('DB_NAME')
+    return psycopg2.connect(
+        host=os.environ.get('DB_HOST', 'postgres-read'),
+        user=os.environ.get('DB_USER', 'appuser'),
+        password=os.environ.get('DB_PASSWORD', 'password123'),
+        dbname=os.environ.get('DB_NAME', 'userdb')
     )
-    return connection
 
 @app.route('/')
 def index():
@@ -22,19 +22,31 @@ def index():
 def get_users():
     try:
         conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT @@hostname as mysql_pod")
-        mysql_pod = cursor.fetchone()['mysql_pod']
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # Get the hostname of the PostgreSQL pod serving this request
+        cursor.execute("SELECT inet_server_addr() as server_ip")
+        server_info = cursor.fetchone()
+
+        # Get pod hostname via a simple query
+        cursor.execute("SHOW server_version")
+        version = cursor.fetchone()
 
         cursor.execute("SELECT * FROM users ORDER BY created_at DESC")
         users = cursor.fetchall()
+
+        # Convert datetime objects to strings for JSON serialization
+        for user in users:
+            if user.get('created_at'):
+                user['created_at'] = user['created_at'].isoformat()
+
         cursor.close()
         conn.close()
 
         return jsonify({
-            "success": True, 
+            "success": True,
             "users": users,
-            "mysql_pod": mysql_pod
+            "postgres_server": str(server_info['server_ip'])
         })
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})

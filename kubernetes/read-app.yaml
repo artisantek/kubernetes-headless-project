@@ -14,12 +14,12 @@ spec:
     spec:
       containers:
       - name: read-app
-        image: artisantek/headless-read:1  # Replace with your image
+        image: artisantek/headless-read:1
         ports:
         - containerPort: 5000
         env:
         - name: DB_HOST
-          value: "mysql-read"
+          value: "postgres-read"
         - name: DB_USER
           value: "appuser"
         - name: DB_PASSWORD

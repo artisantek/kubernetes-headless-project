@@ -1,15 +1,15 @@
 from flask import Flask, request, jsonify
-import mysql.connector
+import psycopg2
 import os
 
 app = Flask(__name__)
 
 def get_db_connection():
-    return mysql.connector.connect(
-        host=os.environ.get('DB_HOST', 'mysql-0.mysql'),
+    return psycopg2.connect(
+        host=os.environ.get('DB_HOST', 'postgres-0.postgres'),
         user=os.environ.get('DB_USER', 'appuser'),
         password=os.environ.get('DB_PASSWORD', 'password123'),
-        database=os.environ.get('DB_NAME', 'userdb')
+        dbname=os.environ.get('DB_NAME', 'userdb')
     )
 
 @app.route('/')

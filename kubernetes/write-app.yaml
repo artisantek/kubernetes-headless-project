@@ -13,44 +13,28 @@ spec:
         app: write-app
     spec:
       initContainers:
-      - name: init-db
-        image: mysql:8.0
+      - name: wait-for-db
+        image: postgres:15
         command:
         - bash
         - -c
         - |
-          set -ex
-          mysql -h ${DB_HOST} -u root << EOF
-          CREATE DATABASE IF NOT EXISTS ${DB_NAME};
-          USE ${DB_NAME};
-          CREATE TABLE IF NOT EXISTS users (
-              id INT AUTO_INCREMENT PRIMARY KEY,
-              name VARCHAR(255) NOT NULL,
-              email VARCHAR(255) NOT NULL,
-              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-          );
-          CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASSWORD}';
-          GRANT SELECT ON ${DB_NAME}.* TO '${DB_USER}'@'%';
-          GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'%';
-          FLUSH PRIVILEGES;
-          EOF
+          echo "Waiting for PostgreSQL primary to be ready..."
+          until pg_isready -h postgres-0.postgres -U postgres; do
+            sleep 2
+          done
+          echo "PostgreSQL is ready."
         env:
-        - name: DB_HOST
-          value: "mysql-0.mysql"
-        - name: DB_USER
-          value: "appuser"
-        - name: DB_PASSWORD
-          value: "password123"
-        - name: DB_NAME
-          value: "userdb"
+        - name: PGPASSWORD
+          value: "postgres"
       containers:
       - name: write-app
-        image: artisantek/headless-write:1
+        image: artisantek/headless-write:2
         ports:
         - containerPort: 5000
         env:
         - name: DB_HOST
-          value: "mysql-0.mysql"
+          value: "postgres-0.postgres"
         - name: DB_USER
           value: "appuser"
         - name: DB_PASSWORD

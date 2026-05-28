@@ -1,0 +1,187 @@
+# ConfigMap: PostgreSQL init scripts
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+data:
+  # This script runs inside the main container during first-time database init.
+  # It creates the replication user, app database, app user, and table.
+  # It also adds the pg_hba.conf entry for replication.
+  init-db.sh: |
+    #!/bin/bash
+    set -e
+
+    # Allow replication connections from any host
+    echo "host replication replicator all md5" >> "$PGDATA/pg_hba.conf"
+
+    # Create replication user
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL
+      CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD 'replpass';
+      CREATE DATABASE userdb;
+    EOSQL
+
+    # Create app user and table
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" -d userdb <<-EOSQL
+      CREATE ROLE appuser WITH LOGIN PASSWORD 'password123';
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO appuser;
+      GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO appuser;
+    EOSQL
+
+    # Reload config so the pg_hba change takes effect
+    pg_ctl reload
+---
+# Headless Service — each pod gets a stable DNS name:
+#   postgres-0.postgres.default.svc.cluster.local
+#   postgres-1.postgres.default.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  clusterIP: None
+  ports:
+  - name: postgres
+    port: 5432
+  selector:
+    app: postgres
+---
+# ClusterIP Service — load balances reads across all postgres pods
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-read
+spec:
+  ports:
+  - name: postgres
+    port: 5432
+  selector:
+    app: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: postgres
+  replicas: 2
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      initContainers:
+      - name: init-postgres
+        image: postgres:15
+        env:
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        command:
+        - bash
+        - -c
+        - |
+          set -e
+          [[ $HOSTNAME =~ -([0-9]+)$ ]] || exit 1
+          ordinal=${BASH_REMATCH[1]}
+
+          if [[ $ordinal -eq 0 ]]; then
+            echo "=== Primary node (postgres-0) ==="
+            # If this is a fresh start, copy init script for docker-entrypoint
+            if [ ! -s "$PGDATA/PG_VERSION" ]; then
+              echo "Fresh primary — init script will run on first boot."
+            else
+              echo "Data exists. Ensuring pg_hba has replication entry..."
+              if ! grep -q "host replication replicator" "$PGDATA/pg_hba.conf"; then
+                echo "host replication replicator all md5" >> "$PGDATA/pg_hba.conf"
+              fi
+            fi
+            # Always copy the init script (it only runs on first boot)
+            cp /config/init-db.sh /docker-entrypoint-initdb.d/init-db.sh
+            chmod +x /docker-entrypoint-initdb.d/init-db.sh
+
+          else
+            echo "=== Replica node (postgres-$ordinal) ==="
+            if [ ! -s "$PGDATA/PG_VERSION" ]; then
+              echo "Waiting for primary to accept connections..."
+              until pg_isready -h postgres-0.postgres -U postgres; do sleep 2; done
+
+              echo "Cloning data from primary using pg_basebackup..."
+              rm -rf "$PGDATA"/*
+              PGPASSWORD=replpass pg_basebackup \
+                -h postgres-0.postgres \
+                -U replicator \
+                -D "$PGDATA" \
+                -Fp -Xs -R
+              echo "Clone complete. Replica will start in standby mode."
+            else
+              echo "Data already exists. Skipping clone."
+            fi
+          fi
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+        - name: config
+          mountPath: /config
+        - name: initdb
+          mountPath: /docker-entrypoint-initdb.d
+      containers:
+      - name: postgres
+        image: postgres:15
+        ports:
+        - containerPort: 5432
+          name: postgres
+        env:
+        - name: POSTGRES_PASSWORD
+          value: "postgres"
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        args:
+        - postgres
+        - -c
+        - wal_level=replica
+        - -c
+        - max_wal_senders=3
+        - -c
+        - hot_standby=on
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+        - name: initdb
+          mountPath: /docker-entrypoint-initdb.d
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+        readinessProbe:
+          exec:
+            command: ["pg_isready", "-U", "postgres"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          exec:
+            command: ["pg_isready", "-U", "postgres"]
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      volumes:
+      - name: config
+        configMap:
+          name: postgres-config
+          defaultMode: 0755
+      - name: initdb
+        emptyDir: {}
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 1Gi
