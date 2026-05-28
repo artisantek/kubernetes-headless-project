@@ -170,6 +170,38 @@ kubectl exec postgres-0 -- psql -U postgres -c "SELECT client_addr, state FROM p
 kubectl exec postgres-1 -- psql -U postgres -c "SELECT pg_is_in_recovery();"
 ```
 
+#### Expected Output
+
+If replication is working correctly:
+
+```bash id="y2j1e3"
+kubectl exec postgres-0 -- psql -U postgres -c "SELECT client_addr, state FROM pg_stat_replication;"
+```
+
+Should show:
+
+```text id="m4n8q2"
+state
+-------
+streaming
+```
+
+And:
+
+```bash id="c7v9k1"
+kubectl exec postgres-1 -- psql -U postgres -c "SELECT pg_is_in_recovery();"
+```
+
+Should show:
+
+```text id="f1r6t8"
+t
+```
+
+* `streaming` → replica connected successfully
+* `t` → replica is running in read-only recovery mode
+
+
 ### Testing the Demo
 
 #### Observe DNS Differences
