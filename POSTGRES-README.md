@@ -1,4 +1,4 @@
-# PostgreSQL StatefulSet — Explained Line by Line
+# PostgreSQL StatefulSet Explained
 
 This document walks through every section of [`postgres-statefulset.yaml`](file:///home/laborant/kubernetes-headless-project/kubernetes/postgres-statefulset.yaml), explaining **what** each part does and **why** it's needed.
 
@@ -165,8 +165,8 @@ spec:
 Because the StatefulSet uses `serviceName: postgres`, each pod gets a predictable DNS entry:
 
 ```
-postgres-0.postgres.default.svc.cluster.local  →  10.244.2.7  (primary)
-postgres-1.postgres.default.svc.cluster.local  →  10.244.1.7  (replica)
+postgres-0.postgres.default.svc.cluster.local  →  (primary)
+postgres-1.postgres.default.svc.cluster.local  →  (replica)
 ```
 
 **Why this matters**: The write-app can connect to `postgres-0.postgres` to always hit the primary. The replica knows to connect to `postgres-0.postgres` for replication. These names are **stable** — they don't change even if pods restart.
